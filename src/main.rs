@@ -4,12 +4,35 @@
 // Feel free to delete this line.
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
-use bevy::{app::AppExit, prelude::*};
+use bevy::{
+    app::AppExit,
+    diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin},
+    prelude::*,
+};
 use bevy_turborand::prelude::*;
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins)
+        .add_plugins((
+            DefaultPlugins.set(WindowPlugin {
+                primary_window: Some(Window {
+                    title: "Sick game".to_string(),
+                    present_mode: bevy::window::PresentMode::Immediate,
+                    ..default()
+                }),
+                ..default()
+            }),
+            // Adds frame time diagnostics
+            FrameTimeDiagnosticsPlugin,
+            // Adds a system that prints diagnostics to the console
+            LogDiagnosticsPlugin::default(),
+            // Any plugin can register diagnostics. Uncomment this to add an entity count diagnostics:
+            // bevy::diagnostic::EntityCountDiagnosticsPlugin::default(),
+            // Uncomment this to add an asset count diagnostics:
+            // bevy::asset::diagnostic::AssetCountDiagnosticsPlugin::<Texture>::default(),
+            // Uncomment this to add system info diagnostics:
+            // bevy::diagnostic::SystemInformationDiagnosticsPlugin::default()
+        ))
         .add_plugins(RngPlugin::default())
         .add_systems(Startup, (setup, spawn_decks))
         .add_systems(Update, (simulate_games, print_win_rates))
@@ -74,6 +97,7 @@ fn dummy_deck() -> Deck {
 pub enum Side {
     Player,
     Enemy,
+    Draw,
 }
 
 #[derive(PartialEq)]
@@ -89,6 +113,7 @@ pub struct Game {
     enemy: Entity,
     turn: GamePhase,
     side: Side,
+    turn_count: usize,
 }
 
 fn print_win_rates(games: Query<&Game>, mut exit: EventWriter<AppExit>) {
@@ -98,16 +123,17 @@ fn print_win_rates(games: Query<&Game>, mut exit: EventWriter<AppExit>) {
             return;
         }
     }
-    let mut counts = [0, 0];
+    let mut counts = [0, 0, 0];
     for game in &games {
         match game.side {
             Side::Player => counts[0] += 1,
             Side::Enemy => counts[1] += 1,
+            Side::Draw => counts[2] += 1,
         }
     }
     info!(
-        "Results: {} player wins, {} enemy wins",
-        counts[0], counts[1]
+        "Results: {} player wins, {} enemy wins, {} draws",
+        counts[0], counts[1], counts[2]
     );
     exit.send(AppExit);
 }
@@ -122,10 +148,17 @@ fn simulate_games(
         let to_play = match game.side {
             Side::Player => game.player,
             Side::Enemy => game.enemy,
+            Side::Draw => {
+                info!("draw");
+                continue;
+            }
         };
         let to_hit = match game.side {
             Side::Player => game.enemy,
             Side::Enemy => game.player,
+            Side::Draw => {
+                unreachable!()
+            }
         };
 
         match game.turn {
@@ -133,18 +166,18 @@ fn simulate_games(
                 let (mut deck, mut play_area, mut rng) = players.get_mut(to_play).unwrap();
                 rng.shuffle(&mut deck.cards);
                 let card = deck.cards.pop();
-                info!("Draw! {:?}", card);
+                // info!("Draw! {:?}", card);
 
                 if let Some(card) = card {
                     let slot = play_area.get_random_open_slot(&mut rng);
                     if let Some(slot) = slot {
-                        info!("Played at {}", slot);
+                        // info!("Played at {}", slot);
                         play_area.cards[slot] = Some(commands.spawn(card).id());
                     } else {
-                        info!("Can't play");
+                        // info!("Can't play");
                     }
                 } else {
-                    info!("NO card :(");
+                    // info!("NO card :(");
                 }
                 game.turn = GamePhase::Attack;
             }
@@ -160,28 +193,38 @@ fn simulate_games(
                             let mut card = cards.get_mut(defender).unwrap();
                             card.health -= attack;
                             if card.health >= 0 {
-                                info!("Blocked but took {} damage", attack);
+                                // info!("Blocked but took {} damage", attack);
                             } else {
-                                info!("Destroyed blocker");
+                                // info!("Destroyed blocker");
                                 commands.entity(defender).despawn_recursive();
                                 defend_area.cards[slot] = None;
                             }
                         } else {
-                            info!("Attacking Directly: {}!", attack);
+                            // info!("Attacking Directly: {}!", attack);
                             deck.health -= attack;
                             if deck.health <= 0 {
-                                info!("Winner: {:?}", game.side);
+                                // info!("Winner: {:?}", game.side);
                                 game.turn = GamePhase::Halt;
-                                return;
+                                continue;
                             }
                         }
                     }
                 }
-
+                if game.turn == GamePhase::Halt {
+                    continue;
+                }
+                game.turn_count += 1;
+                if game.turn_count > 500 {
+                    info!("draw");
+                    game.turn = GamePhase::Halt;
+                    game.side = Side::Draw;
+                    continue;
+                }
                 game.turn = GamePhase::Play;
                 game.side = match game.side {
                     Side::Player => Side::Enemy,
                     Side::Enemy => Side::Player,
+                    Side::Draw => unreachable!(),
                 };
             }
             GamePhase::Halt => {}
@@ -190,7 +233,7 @@ fn simulate_games(
 }
 
 fn spawn_decks(mut commands: Commands, mut global_rng: ResMut<GlobalRng>) {
-    for _i in 0..100 {
+    for _i in 0..100000 {
         let player = commands
             .spawn((
                 dummy_deck(),
@@ -212,6 +255,7 @@ fn spawn_decks(mut commands: Commands, mut global_rng: ResMut<GlobalRng>) {
             enemy,
             turn: GamePhase::Play,
             side: Side::Player,
+            turn_count: 0,
         });
     }
 }
