@@ -1,11 +1,11 @@
-// Bevy code commonly triggers these lints and they may be important signals
-// about code quality. They are sometimes hard to avoid though, and the CI
-// workflow treats them as errors, so this allows them throughout the project.
-// Feel free to delete this line.
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
+pub const SQRT_NUMBER_OF_GAMES: i32 = 10;
+pub const NUMBER_OF_GAMES: i32 = SQRT_NUMBER_OF_GAMES * SQRT_NUMBER_OF_GAMES;
+pub const BOARD_SIZE: f32 = 30.0;
+pub const BOARD_PADDING: f32 = 5.0;
+
 use bevy::{
-    app::AppExit,
     diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin},
     prelude::*,
 };
@@ -17,7 +17,7 @@ fn main() {
             DefaultPlugins.set(WindowPlugin {
                 primary_window: Some(Window {
                     title: "Sick game".to_string(),
-                    present_mode: bevy::window::PresentMode::Immediate,
+                    // present_mode: bevy::window::PresentMode::Immediate,
                     ..default()
                 }),
                 ..default()
@@ -35,7 +35,7 @@ fn main() {
         ))
         .add_plugins(RngPlugin::default())
         .add_systems(Startup, (setup, spawn_decks))
-        .add_systems(Update, (simulate_games, print_win_rates))
+        .add_systems(Update, (simulate_games, place_games, print_win_rates))
         .run();
 }
 
@@ -109,6 +109,7 @@ pub enum GamePhase {
 
 #[derive(Component)]
 pub struct Game {
+    id: i32,
     player: Entity,
     enemy: Entity,
     turn: GamePhase,
@@ -116,7 +117,7 @@ pub struct Game {
     turn_count: usize,
 }
 
-fn print_win_rates(games: Query<&Game>, mut exit: EventWriter<AppExit>) {
+fn print_win_rates(games: Query<&Game>) {
     for game in &games {
         if game.turn != GamePhase::Halt {
             // Not all games have halted
@@ -135,7 +136,6 @@ fn print_win_rates(games: Query<&Game>, mut exit: EventWriter<AppExit>) {
         "Results: {} player wins, {} enemy wins, {} draws",
         counts[0], counts[1], counts[2]
     );
-    exit.send(AppExit);
 }
 
 fn simulate_games(
@@ -232,8 +232,25 @@ fn simulate_games(
     }
 }
 
-fn spawn_decks(mut commands: Commands, mut global_rng: ResMut<GlobalRng>) {
-    for _i in 0..100000 {
+fn place_games(mut games: Query<(&mut Transform, &Game)>) {
+    for (mut transform, game) in &mut games {
+        let x = game.id % SQRT_NUMBER_OF_GAMES;
+        let y = game.id / SQRT_NUMBER_OF_GAMES;
+
+        transform.translation = Vec3::new(
+            x as f32 * (BOARD_SIZE + BOARD_PADDING),
+            y as f32 * (BOARD_SIZE + BOARD_PADDING),
+            0.0,
+        );
+    }
+}
+
+fn spawn_decks(
+    mut commands: Commands,
+    mut global_rng: ResMut<GlobalRng>,
+    asset_server: Res<AssetServer>,
+) {
+    for id in 0..NUMBER_OF_GAMES {
         let player = commands
             .spawn((
                 dummy_deck(),
@@ -250,20 +267,29 @@ fn spawn_decks(mut commands: Commands, mut global_rng: ResMut<GlobalRng>) {
                 RngComponent::from(&mut global_rng),
             ))
             .id();
-        commands.spawn(Game {
-            player,
-            enemy,
-            turn: GamePhase::Play,
-            side: Side::Player,
-            turn_count: 0,
-        });
+        commands
+            .spawn((
+                Game {
+                    id,
+                    player,
+                    enemy,
+                    turn: GamePhase::Play,
+                    side: Side::Player,
+                    turn_count: 0,
+                },
+                SpriteBundle {
+                    texture: asset_server.load("icon.png"),
+                    sprite: Sprite {
+                        custom_size: Some(Vec2::splat(BOARD_SIZE)),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            ))
+            .push_children(&[player, enemy]);
     }
 }
 
-fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+fn setup(mut commands: Commands) {
     commands.spawn(Camera2dBundle::default());
-    commands.spawn(SpriteBundle {
-        texture: asset_server.load("icon.png"),
-        ..Default::default()
-    });
 }
